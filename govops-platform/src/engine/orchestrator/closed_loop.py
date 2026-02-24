@@ -343,3 +343,42 @@ class ClosedLoopEngine:
             if record.cycle_id == cycle_id:
                 return record
         return None
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point (govops-engine)
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    """Entry point for the ``govops-engine`` console script.
+
+    Starts the closed-loop governance engine, submits a default scan cycle,
+    and runs it to completion.
+    """
+    import sys
+
+    engine = ClosedLoopEngine()
+    engine.start()
+
+    config = WorkflowConfig(
+        name="cli-governance-scan",
+        description="Governance scan triggered from the CLI.",
+        auto_enforce=True,
+    )
+
+    async def _run() -> int:
+        cycle_id = await engine.submit_cycle(config)
+        results = await engine.run_pending()
+        engine.stop()
+
+        for result in results:
+            summary = result.summary()
+            logger.info("cycle_result", **summary)
+
+            if result.state.value != "completed":
+                return 1
+        return 0
+
+    exit_code = asyncio.run(_run())
+    sys.exit(exit_code)
