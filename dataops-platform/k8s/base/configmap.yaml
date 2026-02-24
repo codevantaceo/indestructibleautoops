@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dataops-config
+  namespace: dataops
+data:
+  DATAOPS_ENV: "production"
+  DATAOPS_LOG_LEVEL: "INFO"
+  DATAOPS_LOG_FORMAT: "json"
+  DATAOPS_DB_HOST: "dataops-postgres"
+  DATAOPS_DB_PORT: "5432"
+  DATAOPS_DB_NAME: "dataops"
+  DATAOPS_REDIS_URL: "redis://dataops-redis:6379/0"
+  DATAOPS_EVIDENCE_MODE: "strict"
+  DATAOPS_REPLAY_MODE: "continuous"

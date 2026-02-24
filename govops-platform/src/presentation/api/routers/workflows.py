@@ -2,6 +2,9 @@
 
 Provides endpoints to trigger governance analysis cycles, monitor their
 progress, cancel running cycles, and inspect the workflow engine status.
+
+All endpoints delegate to the :class:`ClosedLoopEngine` orchestrator which
+manages the lifecycle of governance cycles.
 """
 from __future__ import annotations
 
@@ -13,9 +16,29 @@ import structlog
 from fastapi import APIRouter, HTTPException, Path, Query, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from engine.orchestrator.analysis_workflow import WorkflowConfig
+from engine.orchestrator.closed_loop import ClosedLoopEngine
+
 logger = structlog.get_logger("govops.workflows")
 
 router = APIRouter(prefix="/api/v1/workflows", tags=["workflows"])
+
+# ---------------------------------------------------------------------------
+# Singleton engine instance — started on module load.
+# In production this would be initialised via app lifespan events with
+# injected scanner/analyzer/enforcer dependencies.
+# ---------------------------------------------------------------------------
+
+_engine = ClosedLoopEngine()
+_engine.start()
+
+
+def get_engine() -> ClosedLoopEngine:
+    """Return the module-level engine instance.
+
+    Exposed as a function so tests can monkeypatch it.
+    """
+    return _engine
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +174,26 @@ class WorkflowEngineStatus(BaseModel):
 )
 async def trigger_cycle(body: TriggerCycleRequest) -> CycleTriggerResponse:
     """Accept a governance cycle request and enqueue it for processing."""
-    cycle_id = str(uuid.uuid4())
+    engine = get_engine()
+
+    config = WorkflowConfig(
+        name=body.name,
+        description=body.description,
+        modules=body.modules,
+        auto_enforce=body.auto_enforce,
+        severity_threshold=body.severity_threshold,
+        max_duration_seconds=body.max_duration_seconds,
+        tags=body.tags,
+    )
+
+    try:
+        cycle_id = await engine.submit_cycle(config)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        )
+
     logger.info(
         "cycle_triggered",
         cycle_id=cycle_id,
@@ -160,7 +202,6 @@ async def trigger_cycle(body: TriggerCycleRequest) -> CycleTriggerResponse:
         auto_enforce=body.auto_enforce,
     )
 
-    # Placeholder — in production this enqueues via the workflow engine
     return CycleTriggerResponse(
         cycle_id=cycle_id,
         status="pending",
@@ -185,20 +226,43 @@ async def list_cycles(
     ),
 ) -> PaginatedCyclesResponse:
     """List governance cycles with pagination and optional status filter."""
+    engine = get_engine()
+    history = engine.history
+
+    if status_filter:
+        history = [r for r in history if r.state == status_filter]
+
+    total = len(history)
+    page = history[skip : skip + limit]
+
+    items = [
+        CycleSummary(
+            cycle_id=r.cycle_id,
+            name=r.name,
+            status=r.state,
+            modules_total=r.modules_scanned,
+            findings_count=r.findings_count,
+            created_at=r.started_at or datetime.now(timezone.utc),
+            started_at=r.started_at,
+            completed_at=r.completed_at,
+        )
+        for r in page
+    ]
+
     logger.info(
         "cycles_list_requested",
         skip=skip,
         limit=limit,
         status_filter=status_filter,
+        total=total,
     )
 
-    # Placeholder — in production this queries the cycle repository
     return PaginatedCyclesResponse(
-        items=[],
-        total=0,
+        items=items,
+        total=total,
         skip=skip,
         limit=limit,
-        has_next=False,
+        has_next=(skip + limit) < total,
     )
 
 
@@ -211,19 +275,21 @@ async def list_cycles(
 )
 async def get_workflow_status() -> WorkflowEngineStatus:
     """Return the current state of the workflow engine."""
+    engine = get_engine()
+    engine_status = engine.status()
+
     logger.info("workflow_status_requested")
 
-    # Placeholder — in production this queries the engine orchestrator
     return WorkflowEngineStatus(
-        engine_status="running",
-        active_cycles=0,
-        queued_cycles=0,
-        completed_today=0,
-        failed_today=0,
-        workers_available=4,
-        workers_total=4,
-        uptime_seconds=0.0,
-        last_cycle_at=None,
+        engine_status=engine_status.engine_status,
+        active_cycles=1 if engine_status.active_cycle else 0,
+        queued_cycles=engine_status.queued_cycles,
+        completed_today=engine_status.completed_count,
+        failed_today=engine_status.failed_count,
+        workers_available=engine_status.workers_available,
+        workers_total=engine_status.workers_total,
+        uptime_seconds=engine_status.uptime_seconds,
+        last_cycle_at=engine_status.last_cycle_at,
     )
 
 
@@ -236,23 +302,30 @@ async def get_workflow_status() -> WorkflowEngineStatus:
     responses={404: {"description": "Cycle not found."}},
 )
 async def get_cycle(
-    cycle_id: str = Path(..., description="UUID of the governance cycle."),
+    cycle_id: str = Path(..., description="ID of the governance cycle."),
 ) -> CycleDetail:
     """Retrieve a single governance cycle by its identifier."""
-    logger.info("cycle_detail_requested", cycle_id=cycle_id)
+    engine = get_engine()
+    record = engine.get_cycle(cycle_id)
 
-    try:
-        uuid.UUID(cycle_id)
-    except ValueError:
+    if record is None:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid cycle ID format: {cycle_id}",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Governance cycle {cycle_id} not found.",
         )
 
-    # Placeholder — in production this fetches from the cycle repository
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Governance cycle {cycle_id} not found.",
+    logger.info("cycle_detail_requested", cycle_id=cycle_id)
+
+    return CycleDetail(
+        cycle_id=record.cycle_id,
+        name=record.name,
+        status=record.state,
+        modules_total=record.modules_scanned,
+        findings_count=record.findings_count,
+        created_at=record.started_at or datetime.now(timezone.utc),
+        started_at=record.started_at,
+        completed_at=record.completed_at,
+        duration_seconds=record.duration_seconds,
     )
 
 
@@ -268,24 +341,25 @@ async def get_cycle(
     },
 )
 async def cancel_cycle(
-    cycle_id: str = Path(..., description="UUID of the governance cycle to cancel."),
+    cycle_id: str = Path(..., description="ID of the governance cycle to cancel."),
 ) -> CycleCancelResponse:
     """Request cancellation of a governance cycle.
 
     Only cycles in ``pending`` or ``running`` status can be cancelled.
     """
-    logger.info("cycle_cancel_requested", cycle_id=cycle_id)
+    engine = get_engine()
+    cancelled = await engine.cancel_cycle(cycle_id)
 
-    try:
-        uuid.UUID(cycle_id)
-    except ValueError:
+    if not cancelled:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid cycle ID format: {cycle_id}",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Governance cycle {cycle_id} not found or already completed.",
         )
 
-    # Placeholder — in production this signals the workflow engine
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Governance cycle {cycle_id} not found.",
+    logger.info("cycle_cancel_requested", cycle_id=cycle_id)
+
+    return CycleCancelResponse(
+        cycle_id=cycle_id,
+        status="cancelled",
+        message="Cycle cancellation requested.",
     )
