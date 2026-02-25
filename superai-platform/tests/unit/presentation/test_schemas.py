@@ -7,12 +7,10 @@ from pydantic import ValidationError
 from src.presentation.api.schemas import (
     UserCreateRequest,
     UserUpdateRequest,
-    LoginRequest,
-    CircuitRequest,
-    VQERequest,
-    ExpertCreateRequest,
-    MatrixRequest,
-    OptimizationRequest,
+    TokenRequest,
+    QuantumJobRequest,
+    AIExpertCreateRequest,
+    ScientificMatrixRequest,
 )
 
 
@@ -48,62 +46,43 @@ class TestUserSchemas:
         assert req.full_name == "New Name"
         assert req.role is None
 
-    def test_login_request(self):
-        req = LoginRequest(username="test", password="pass")
+    def test_token_request(self):
+        req = TokenRequest(username="test", password="pass")
         assert req.username == "test"
 
 
 class TestQuantumSchemas:
-    def test_valid_circuit_request(self):
-        req = CircuitRequest(num_qubits=4, circuit_type="ghz", shots=500)
+    def test_valid_quantum_job(self):
+        req = QuantumJobRequest(num_qubits=4, algorithm="bell", shots=500)
         assert req.num_qubits == 4
 
     def test_qubits_out_of_range(self):
         with pytest.raises(ValidationError):
-            CircuitRequest(num_qubits=0)
+            QuantumJobRequest(num_qubits=0, algorithm="bell")
         with pytest.raises(ValidationError):
-            CircuitRequest(num_qubits=31)
-
-    def test_invalid_circuit_type(self):
-        with pytest.raises(ValidationError):
-            CircuitRequest(num_qubits=2, circuit_type="invalid")
+            QuantumJobRequest(num_qubits=31, algorithm="bell")
 
     def test_shots_range(self):
         with pytest.raises(ValidationError):
-            CircuitRequest(num_qubits=2, shots=0)
+            QuantumJobRequest(num_qubits=2, algorithm="bell", shots=0)
         with pytest.raises(ValidationError):
-            CircuitRequest(num_qubits=2, shots=200000)
-
-    def test_vqe_request(self):
-        req = VQERequest(
-            hamiltonian=[[1.0, 0.0], [0.0, -1.0]],
-            num_qubits=2,
-            ansatz="ry",
-            optimizer="cobyla",
-        )
-        assert req.num_qubits == 2
+            QuantumJobRequest(num_qubits=2, algorithm="bell", shots=200000)
 
 
 class TestAISchemas:
     def test_expert_create(self):
-        req = ExpertCreateRequest(name="Quantum Expert", domain="quantum")
+        req = AIExpertCreateRequest(name="Quantum Expert", domain="quantum")
         assert req.name == "Quantum Expert"
         assert req.temperature == 0.7
 
     def test_temperature_range(self):
         with pytest.raises(ValidationError):
-            ExpertCreateRequest(name="test", domain="test", temperature=3.0)
+            AIExpertCreateRequest(name="test", domain="test", temperature=3.0)
 
 
 class TestScientificSchemas:
     def test_matrix_request(self):
-        req = MatrixRequest(matrix=[[1.0, 2.0], [3.0, 4.0]])
-        assert len(req.matrix) == 2
-
-    def test_optimization_request(self):
-        req = OptimizationRequest(
-            method="minimize",
-            objective="x[0]**2 + x[1]**2",
-            initial_guess=[1.0, 1.0],
+        req = ScientificMatrixRequest(
+            matrix=[[1.0, 2.0], [3.0, 4.0]], operation="determinant"
         )
-        assert req.method == "minimize"
+        assert len(req.matrix) == 2

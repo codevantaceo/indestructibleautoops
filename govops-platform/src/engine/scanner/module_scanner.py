@@ -295,3 +295,30 @@ class ModuleScanner:
                 },
             ))
         return findings
+
+
+def main() -> None:
+    """Entry point for the ``govops-scan`` console script."""
+    import argparse
+    import json
+    import sys
+
+    parser = argparse.ArgumentParser(description="GovOps Module Scanner")
+    parser.add_argument("repo_root", nargs="?", default=".", help="Repository root path to scan")
+    parser.add_argument("--output", help="Write JSON report to file instead of stdout")
+    args = parser.parse_args()
+
+    scanner = ModuleScanner()
+    report = scanner.scan_all(Path(args.repo_root))
+
+    output = json.dumps(report.to_dict(), indent=2)
+    if args.output:
+        Path(args.output).write_text(output)
+    else:
+        print(output)
+
+    sys.exit(1 if report.total_findings > 0 else 0)
+
+
+if __name__ == "__main__":
+    main()
