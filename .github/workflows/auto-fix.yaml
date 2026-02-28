@@ -218,9 +218,10 @@ jobs:
       - name: Create pull request
         uses: peter-evans/create-pull-request@v6
         with:
-          title: '[AutoFix] Governance violations run #${{ github.run_number }}'
+          title: '[AutoFix] Governance violations run ${{ github.run_id }} (attempt ${{ github.run_attempt }})'
           body-path: pr_summary.md
-          branch: auto-fix/${{ github.run_id }}-${{ github.run_attempt }}
+          branch: auto-fix/${{ github.run_number }}
+          delete-branch: true
           labels: |
             auto-fix
             governance
