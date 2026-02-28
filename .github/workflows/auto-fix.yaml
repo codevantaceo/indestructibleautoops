@@ -177,7 +177,7 @@ jobs:
   L4-create-pr:
     name: Create Signed PR
     needs: [L2-analyze, L3-autofix]
-    if: github.event_name != 'pull_request' && needs.L3-autofix.outputs.fixes_applied != '0'
+    if: github.event_name == 'pull_request' && needs.L3-autofix.outputs.fixes_applied != '0'
     runs-on: ubuntu-latest
     permissions:
       contents: write
